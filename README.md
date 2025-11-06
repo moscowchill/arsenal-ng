@@ -135,21 +135,59 @@ pip install -U PyYAML
 
 --
 
-If you encounter an exception similar to the following (contains TIOCSTI in strace) when running Arsenal:
+### TIOCSTI and Modern Kernels (Auto-Prefill Fix)
+
+Modern Linux kernels disable TIOCSTI for security reasons, which breaks Arsenal's auto-prefill feature. We've implemented **multiple solutions** to fix this!
+
+#### 🎯 Recommended: Shell Integration (True Auto-Prefill)
+
+Install shell integration for the best experience - commands are automatically prefilled in your terminal:
+
+```bash
+./install.sh
 ```
-[...]
-    fcntl.ioctl(stdin, termios.TIOCSTI, c)
-OSError: [Errno 5] Input/output error
+
+Or manually add to your shell config:
+```bash
+# For bash - add to ~/.bashrc
+source /path/to/arsenal/arsenal_shell_integration.sh
+
+# For zsh - add to ~/.zshrc
+source /path/to/arsenal/arsenal_shell_integration.sh
 ```
-Then you may need to re-enable TIOCSTI. Please run the following commands as root to fix this issue on the current session :
+
+Then restart your shell or run `source ~/.bashrc` (or `~/.zshrc`).
+
+**How it works:**
+- **Bash**: Uses `read -e -i` to prefill command in an interactive prompt
+- **Zsh**: Uses `print -z` to push command to the next prompt
+- You can edit the command before executing
+- Command is added to your history
+
+#### Alternative Methods
+
+If you don't want to install shell integration, Arsenal will automatically try these fallbacks:
+
+1. **TIOCSTI** - If available on old kernels (automatic)
+2. **Clipboard** - Copy to system clipboard via `pyperclip` (automatic)
+3. **OSC 52** - Copy via terminal escape sequences (automatic)
+4. **Print** - Display command with copy instructions (automatic)
+
+**Command-line options** for explicit control:
+```bash
+arsenal --copy     # Copy to clipboard
+arsenal --exec     # Execute immediately
+arsenal --tmux     # Send to tmux pane
+arsenal --print    # Just print the command
 ```
+
+**Legacy workaround** (not recommended):
+```bash
+# Only for old kernels that support it
 sysctl -w dev.tty.legacy_tiocsti=1
 ```
-If you want this workaround to survive a reboot, add the following configuration to sysctl.conf file and reboot :
-```
-echo "dev.tty.legacy_tiocsti=1" >> /etc/sysctl.conf
-```
-More information is available in the issue [https://github.com/Orange-Cyberdefense/arsenal/issues/77](https://github.com/Orange-Cyberdefense/arsenal/issues/77)
+
+More information in issue [#77](https://github.com/Orange-Cyberdefense/arsenal/issues/77)
 
 
 ## Mindmap

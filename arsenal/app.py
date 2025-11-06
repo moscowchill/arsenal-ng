@@ -168,33 +168,121 @@ class App:
                 break
 
     def prefil_shell_cmd(self, cmd):
+        """
+        Prefill shell command line using various methods.
+        Tries multiple approaches as TIOCSTI is disabled in modern kernels.
+        """
+        # Method 1: Try TIOCSTI first (legacy method, works on old kernels)
         stdin = 0
-        # save TTY attribute for stdin
-        oldattr = termios.tcgetattr(stdin)
-        # create new attributes to fake input
-        newattr = termios.tcgetattr(stdin)
-        # disable echo in stdin -> only inject cmd in stdin queue (with TIOCSTI)
-        newattr[3] &= ~termios.ECHO
-        # enable non canonical mode -> ignore special editing characters
-        newattr[3] &= ~termios.ICANON
-        # use the new attributes
-        termios.tcsetattr(stdin, termios.TCSANOW, newattr)
-        # write the selected command in stdin queue
+        tiocsti_worked = False
         try:
+            # Check if we have a TTY first
+            if not os.isatty(stdin):
+                raise OSError("Not a TTY")
+
+            # save TTY attribute for stdin
+            oldattr = termios.tcgetattr(stdin)
+            # create new attributes to fake input
+            newattr = termios.tcgetattr(stdin)
+            # disable echo in stdin -> only inject cmd in stdin queue (with TIOCSTI)
+            newattr[3] &= ~termios.ECHO
+            # enable non canonical mode -> ignore special editing characters
+            newattr[3] &= ~termios.ICANON
+            # use the new attributes
+            termios.tcsetattr(stdin, termios.TCSANOW, newattr)
+            # write the selected command in stdin queue
             for c in cmd.cmdline:
                 fcntl.ioctl(stdin, termios.TIOCSTI, c)
-        except OSError:
-            message = "========== OSError ============\n"
-            message += "Arsenal needs TIOCSTI enable for running\n"
-            message += "Please run the following commands as root to fix this issue on the current session :\n"
-            message += "sysctl -w dev.tty.legacy_tiocsti=1\n"
-            message += "If you want this workaround to survive a reboot,\n" 
-            message += "add the following configuration to sysctl.conf file and reboot :\n"
-            message += "echo \"dev.tty.legacy_tiocsti=1\" >> /etc/sysctl.conf\n"
-            message += "More details about this bug here: https://github.com/Orange-Cyberdefense/arsenal/issues/77"
-            print(message)
-        # restore TTY attribute for stdin
-        termios.tcsetattr(stdin, termios.TCSADRAIN, oldattr)
+            # restore TTY attribute for stdin
+            termios.tcsetattr(stdin, termios.TCSADRAIN, oldattr)
+            tiocsti_worked = True
+            return
+        except (OSError, termios.error):
+            # TIOCSTI failed - could be modern kernel with security patch or not a TTY
+            # Restore terminal on error
+            try:
+                termios.tcsetattr(stdin, termios.TCSADRAIN, oldattr)
+            except:
+                pass
+
+        # Method 2: Shell integration - exec into shell with prefill
+        if not tiocsti_worked:
+            if self._try_shell_integration_prefill(cmd.cmdline):
+                return
+
+        # Method 3: Try pyperclip (system clipboard)
+        clipboard_worked = False
+        try:
+            import pyperclip
+            pyperclip.copy(cmd.cmdline)
+            clipboard_worked = True
+            print(f"\n╭{'─' * 78}╮")
+            print(f"│ [Arsenal] Command copied to clipboard{' ' * 39}│")
+            print(f"│{' ' * 78}│")
+            print(f"│ {cmd.cmdline:<76} │")
+            print(f"│{' ' * 78}│")
+            print(f"│ → Paste with: Ctrl+Shift+V or Middle-click{' ' * 32}│")
+            print(f"╰{'─' * 78}╯")
+            return
+        except (ImportError, Exception) as e:
+            pass
+
+        # Method 4: Try OSC 52 (terminal escape sequence clipboard)
+        if not clipboard_worked:
+            try:
+                import base64
+                b64_cmd = base64.b64encode(cmd.cmdline.encode()).decode()
+                # OSC 52 escape sequence to set clipboard (works in many modern terminals)
+                osc52 = f"\033]52;c;{b64_cmd}\007"
+                print(osc52, end='', flush=True)
+                print(f"\n╭{'─' * 78}╮")
+                print(f"│ [Arsenal] Command sent to terminal clipboard{' ' * 32}│")
+                print(f"│{' ' * 78}│")
+                print(f"│ {cmd.cmdline:<76} │")
+                print(f"│{' ' * 78}│")
+                print(f"│ → Paste with: Ctrl+Shift+V or Middle-click{' ' * 32}│")
+                print(f"╰{'─' * 78}╯")
+                return
+            except Exception:
+                pass
+
+        # Fallback: Just print the command with helpful instructions
+        print(f"\n╭{'─' * 78}╮")
+        print(f"│ [Arsenal] Auto-prefill not available (TIOCSTI disabled){' ' * 24}│")
+        print(f"│{' ' * 78}│")
+        print(f"│ Your command:{' ' * 64}│")
+        print(f"│ {cmd.cmdline:<76} │")
+        print(f"│{' ' * 78}│")
+        print(f"│ → Copy and paste manually, or use these options:{' ' * 28}│")
+        print(f"│   • arsenal --copy     (auto-copy to clipboard){' ' * 29}│")
+        print(f"│   • arsenal --exec     (execute immediately){' ' * 33}│")
+        print(f"│   • arsenal --tmux     (send to tmux pane){' ' * 35}│")
+        print(f"╰{'─' * 78}╯\n")
+
+    def _try_shell_integration_prefill(self, command):
+        """
+        Try to prefill command using shell-specific integration via wrapper function.
+        Writes command to a temp file that a wrapper function can read.
+        """
+        import tempfile
+
+        # Check if user has shell integration installed
+        if not os.environ.get('ARSENAL_SHELL_INTEGRATION'):
+            return False
+
+        # Detect parent shell
+        shell = os.environ.get('SHELL', '/bin/bash')
+        shell_name = os.path.basename(shell)
+
+        # Write command to the designated file
+        arsenal_cmd_file = os.path.expanduser('~/.arsenal_cmd')
+        try:
+            with open(arsenal_cmd_file, 'w') as f:
+                f.write(command)
+            # Silently return - the wrapper function will print the message
+            return True
+        except Exception:
+            return False
 
 
 def main():
